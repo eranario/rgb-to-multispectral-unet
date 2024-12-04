@@ -162,3 +162,80 @@ class VAE(nn.Module):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar
+    
+##############################################
+################ DCGAN SETUP #################
+##############################################
+
+class Generator(nn.Module):
+    def __init__(self, noise_dim, out_channels, img_size=224):
+        super(Generator, self).__init__()
+
+        self.init_size = img_size // 4
+        self.l1 = nn.Sequential(
+            nn.Linear(noise_dim, 512 * self.init_size ** 2)
+        )
+
+        self.conv_blocks = nn.Sequential(
+            nn.BatchNorm2d(512),
+            nn.Upsample(scale_factor=2),
+            nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256, 0.8),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Upsample(scale_factor=2),
+            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128, 0.8),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64, 0.8),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv2d(64, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.Tanh()
+        )
+
+    def forward(self, z):
+
+        out = self.l1(z)
+        out = out.view(out.shape[0], 512, self.init_size, self.init_size)
+
+        img = self.conv_blocks(out)
+        return img
+    
+class Discriminator(nn.Module):
+    def __init__(self, in_channels, img_size=224):
+        super(Discriminator, self).__init__()
+
+        self.model = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv2d(512, 512, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+
+        ds_size = img_size // 2 ** 5
+        self.fc = nn.Sequential(
+            nn.Linear(512 * ds_size * ds_size, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        out = self.model(x)
+        out = out.view(out.size(0), -1)
+        out = self.fc(out)
+        return out
