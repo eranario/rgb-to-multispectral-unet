@@ -135,9 +135,6 @@ class PotatoDataset(Dataset):
     """
     @staticmethod
     def align_images(base_img, img_to_align):
-        """
-        Align img_to_align to base_img using ORB keypoints.
-        """
         orb = cv2.ORB_create(6000)
         keypoints1, descriptors1 = orb.detectAndCompute(base_img, None)
         keypoints2, descriptors2 = orb.detectAndCompute(img_to_align, None)
@@ -167,8 +164,8 @@ class PotatoDataset(Dataset):
         # Filter good matches
         good = []
         for m, n in matches:
-        if m.distance < 0.7 * n.distance:
-                good.append(m)
+            if m.distance < 0.7 * n.distance:
+                    good.append(m)
 
         # Estimate homography
         src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
