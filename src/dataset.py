@@ -132,12 +132,9 @@ class PotatoDataset(Dataset):
                 f"Size mismatch: RGB {rgb_resized.shape[:2]} vs {channel} {spectral_im.shape}"
 
         return (rgb_resized, spectral_images)
-    
+    """
     @staticmethod
     def align_images(base_img, img_to_align):
-        """
-        Align img_to_align to base_img using ORB keypoints.
-        """
         orb = cv2.ORB_create(6000)
         keypoints1, descriptors1 = orb.detectAndCompute(base_img, None)
         keypoints2, descriptors2 = orb.detectAndCompute(img_to_align, None)
@@ -154,4 +151,27 @@ class PotatoDataset(Dataset):
         # homography
         h, _ = cv2.findHomography(points2, points1, cv2.RANSAC)
         aligned_img = cv2.warpPerspective(img_to_align, h, (base_img.shape[1], base_img.shape[0]))
+        return aligned_img
+    """
+    def align_images(base_img, img_to_align): 
+        sift = cv2.SIFT_create()
+        kp1, des1 = sift.detectAndCompute(img_to_align, None)
+        kp2, des2 = sift.detectAndCompute(base_img, None)
+
+        matcher = cv2.FlannBasedMatcher()
+        matches = matcher.knnMatch(des1, des2, k=2)
+
+        # Filter good matches
+        good = []
+        for m, n in matches:
+            if m.distance < 0.7 * n.distance:
+                    good.append(m)
+
+        # Estimate homography
+        src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        H, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+
+        # Warp image
+        aligned_img = cv2.warpPerspective(img_to_align, H, (base_img.shape[1], base_img.shape[0]))
         return aligned_img
