@@ -153,7 +153,7 @@ class PotatoDataset(Dataset):
         aligned_img = cv2.warpPerspective(img_to_align, h, (base_img.shape[1], base_img.shape[0]))
         return aligned_img
     """
-    def align_images(base_img, img_to_align): #1
+    def align_images(base_img, img_to_align): 
         sift = cv2.SIFT_create()
         kp1, des1 = sift.detectAndCompute(img_to_align, None)
         kp2, des2 = sift.detectAndCompute(base_img, None)
