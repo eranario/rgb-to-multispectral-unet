@@ -9,11 +9,14 @@ from sklearn.model_selection import train_test_split
 
 class PotatoDataset(Dataset):
     
-    def __init__(self, rgb_dir, spectral_dir, transform=None, mode='train', align=False, split_ratio=0.8, random_seed=42):
+    def __init__(
+        self, rgb_dir, spectral_dir, transform=None, mode='train', align=False, crop_factor=0.8, split_ratio=0.8, random_seed=42
+    ):
         """Multispectral Potato Detection and Classification Dataset"""
         self.mode = mode
         self.transform = transform
         self.align = align
+        self.crop_factor = crop_factor
         self.channels = ['Green_Channel', 'Near_Infrared_Channel', 'Red_Channel', 'Red_Edge_Channel']
 
         if mode == 'test':
@@ -87,12 +90,7 @@ class PotatoDataset(Dataset):
 
         return (rgb_image, *spectral_images)
 
-    @staticmethod
-    def process_image(args):
-        """
-        Process a single image (alignment and resizing).
-        Ensures RGB and spectral images are correctly matched by comparing their base names.
-        """
+    def process_image(self, args):
         rgb_dir, spectral_dir, folder_set, rgb_name, idx, channels, spectral_files, align = args
 
         # Read the RGB image
@@ -131,29 +129,27 @@ class PotatoDataset(Dataset):
             assert spectral_im.shape == rgb_resized.shape[:2], \
                 f"Size mismatch: RGB {rgb_resized.shape[:2]} vs {channel} {spectral_im.shape}"
 
-        return (rgb_resized, spectral_images)
-    """
+        # Crop images to the center
+        crop_height = int(height * self.crop_factor)
+        crop_width = int(width * self.crop_factor)
+        crop_size = (crop_height, crop_width)
+        rgb_cropped = PotatoDataset.center_crop(rgb_resized, crop_size)
+        spectral_cropped = [PotatoDataset.center_crop(img, crop_size) for img in spectral_images]
+
+        return (rgb_cropped, spectral_cropped)
+
     @staticmethod
     def align_images(base_img, img_to_align):
-        orb = cv2.ORB_create(6000)
-        keypoints1, descriptors1 = orb.detectAndCompute(base_img, None)
-        keypoints2, descriptors2 = orb.detectAndCompute(img_to_align, None)
-
-        # match features
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-        matches = bf.match(descriptors1, descriptors2)
-        matches = sorted(matches, key=lambda x: x.distance)
-
-        # extract points
-        points1 = np.float32([keypoints1[m.queryIdx].pt for m in matches])
-        points2 = np.float32([keypoints2[m.trainIdx].pt for m in matches])
-
-        # homography
-        h, _ = cv2.findHomography(points2, points1, cv2.RANSAC)
-        aligned_img = cv2.warpPerspective(img_to_align, h, (base_img.shape[1], base_img.shape[0]))
-        return aligned_img
-    """
-    def align_images(base_img, img_to_align): 
+        """
+        Align two images using SIFT keypoints and RANSAC.
+        
+        Args:
+            base_img (numpy.ndarray): The base image to align to.
+            img_to_align (numpy.ndarray): The image to align.
+            
+        Returns:
+            numpy.ndarray: The aligned image.
+        """ 
         sift = cv2.SIFT_create()
         kp1, des1 = sift.detectAndCompute(img_to_align, None)
         kp2, des2 = sift.detectAndCompute(base_img, None)
@@ -175,3 +171,23 @@ class PotatoDataset(Dataset):
         # Warp image
         aligned_img = cv2.warpPerspective(img_to_align, H, (base_img.shape[1], base_img.shape[0]))
         return aligned_img
+    
+    @staticmethod
+    def center_crop(image, crop_size):
+        """
+        Crop the center of an image to the given size.
+        
+        Args:
+            image (numpy.ndarray): The input image (H x W or H x W x C).
+            crop_size (tuple): The desired output size (height, width).
+        
+        Returns:
+            numpy.ndarray: The center-cropped image.
+        """
+        h, w = image.shape[:2]
+        crop_h, crop_w = crop_size
+        
+        start_h = (h - crop_h) // 2
+        start_w = (w - crop_w) // 2
+        
+        return image[start_h:start_h + crop_h, start_w:start_w + crop_w]
