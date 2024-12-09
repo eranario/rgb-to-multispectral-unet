@@ -106,15 +106,16 @@ class TransformerBlockSpectral(nn.Module):
                 
         # self attention
         x = x.transpose(0, 1)
-        attn_output, _ = self.self_attn(x, x, x)
+        attn_output, self_weights = self.self_attn(x, x, x)
         x = x + self.dropout(attn_output)
         x = self.norm1(x)
         
         # cross attention
+        cross_weights = None
         if signal is not None:
             signal = self.proj(signal)
             signal = signal.transpose(0, 1)
-            attn_output, _ = self.cross_attn(x, signal, signal) # TODO: try V as image
+            attn_output, cross_weights = self.cross_attn(x, signal, signal) # TODO: try V as image
             x = x + self.dropout(attn_output)
             x = self.norm2(x)
             
@@ -128,7 +129,7 @@ class TransformerBlockSpectral(nn.Module):
         x = x.permute(0, 2, 1).view(b, c, ph, pw)
         x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False) # TODO: maybe this makes things worst
         
-        return x
+        return x, self_weights, cross_weights
     
 class SpectralEmbedding(nn.Module):
     
@@ -454,7 +455,7 @@ class Discriminator(nn.Module):
 ##############################################
 
 class UNeTransformedSpectral(nn.Module):
-    def __init__(self, in_channels, out_channels, num_bands, spectral_dim=256, num_tokens=196, patch_size=16):
+    def __init__(self, in_channels, out_channels, num_bands, spectral_dim=256, num_tokens=196, patch_size=4):
         super(UNeTransformedSpectral, self).__init__()
         
         # spectral embedding
@@ -482,20 +483,20 @@ class UNeTransformedSpectral(nn.Module):
         # output layer
         self.out = nn.Conv2d(in_channels=64, out_channels=out_channels, kernel_size=1)
     
-    def forward(self, x, spectral_signal):
+    def forward(self, x, spectral_signal, get_weights=False):
         
         # create spectral embedding
         spectral_signal = self.spectral_embed(spectral_signal)
         
         # decoder
         down_1, p1 = self.down_conv_1(x)
-        trans_1 = self.trans_1(down_1, spectral_signal)
+        trans_1, self_weights_1, cross_weights_1 = self.trans_1(down_1, spectral_signal)
         down_2, p2 = self.down_conv_2(p1)
-        trans_2 = self.trans_2(down_2, spectral_signal)
+        trans_2, self_weights_2, cross_weights_2 = self.trans_2(down_2, spectral_signal)
         down_3, p3 = self.down_conv_3(p2)
-        trans_3 = self.trans_3(down_3, spectral_signal)
+        trans_3, self_weights_3, cross_weights_3 = self.trans_3(down_3, spectral_signal)
         down_4, p4 = self.down_conv_4(p3)
-        trans_4 = self.trans_4(down_4, spectral_signal)
+        trans_4, self_weights_4, cross_weights_4 = self.trans_4(down_4, spectral_signal)
         
         # bottleneck
         b = self.bottle_neck(p4)
@@ -508,4 +509,12 @@ class UNeTransformedSpectral(nn.Module):
         
         # output layer
         out = self.out(up_4)
+        
+        if get_weights:
+            attn_weights = {
+                "self": [self_weights_1, self_weights_2, self_weights_3, self_weights_4],
+                "cross": [cross_weights_1, cross_weights_2, cross_weights_3, cross_weights_4]
+            }
+            return out, attn_weights
+
         return out
