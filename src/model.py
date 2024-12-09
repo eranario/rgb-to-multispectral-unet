@@ -78,10 +78,11 @@ class TransformerBlock(nn.Module):
         return x
     
 class TransformerBlockSpectral(nn.Module):
-    def __init__(self, embed_dim, num_heads, ff_dim, dropout=0.3):
+    def __init__(self, embed_dim, signal_dim, num_heads, ff_dim, patch_size, dropout=0.3):
         super(TransformerBlockSpectral, self).__init__()
-        
+                
         # transformer layers
+        self.patch_embed = PatchEmbedding(in_channels=embed_dim, embed_dim=embed_dim, patch_size=patch_size)
         self.self_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout)
         self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout)
         self.feed_forward = nn.Sequential(
@@ -94,18 +95,25 @@ class TransformerBlockSpectral(nn.Module):
         self.norm3 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
         
+        self.proj = nn.Linear(signal_dim, embed_dim)
+        
     def forward(self, x, signal=None):
         
+        b, c, h, w = x.shape
+        
+        # apply patch embedding
+        x, (ph, pw) = self.patch_embed(x)
+                
         # self attention
-        b, c, h, w = x.size()
-        x = x.view(b, c, h * w).permute(2, 0, 1)
+        x = x.transpose(0, 1)
         attn_output, _ = self.self_attn(x, x, x)
         x = x + self.dropout(attn_output)
         x = self.norm1(x)
         
         # cross attention
         if signal is not None:
-            signal = signal.permute(1, 0, 2)
+            signal = self.proj(signal)
+            signal = signal.transpose(0, 1)
             attn_output, _ = self.cross_attn(x, signal, signal) # TODO: try V as image
             x = x + self.dropout(attn_output)
             x = self.norm2(x)
@@ -115,6 +123,10 @@ class TransformerBlockSpectral(nn.Module):
         ff_output = self.feed_forward(x)
         x = x + self.dropout(ff_output)
         x = self.norm3(x)
+        
+        # reshape back to b, c, h, w
+        x = x.permute(0, 2, 1).view(b, c, ph, pw)
+        x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False) # TODO: maybe this makes things worst
         
         return x
     
@@ -156,9 +168,41 @@ class SpectralEmbedding(nn.Module):
 
         # apply linear transformation
         x = self.proj(x) # bs, num_tokens, embed_dim
-        x = x.permute(0, 2, 1)
     
         return x
+    
+class PatchEmbedding(nn.Module):
+    def __init__(self, in_channels, embed_dim, patch_size):
+        super(PatchEmbedding, self).__init__()
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.embed_dim = embed_dim
+        self.proj = None
+        
+    def forward(self, x):
+        _, _, h, w = x.shape
+        
+        patch_size = self.patch_size
+        while h % patch_size != 0 or w % patch_size != 0:
+            patch_size -= 1
+            if patch_size < 1:
+                raise ValueError("Invalid patch size")
+
+        if self.proj is None or self.proj.kernel_size != (patch_size, patch_size):
+            self.proj = nn.Conv2d(
+                in_channels=self.in_channels,
+                out_channels=self.embed_dim,
+                kernel_size=patch_size,
+                stride=patch_size
+            ).to(x.device)
+            
+        x = self.proj(x) # b, embed_dim, h // patch_size, w // patch_size
+
+        # reshape to sequence format
+        _, _, ph, pw = x.shape
+        x = x.flatten(2).transpose(1, 2) # b, num_patches, embed_dim
+        
+        return x, (ph, pw)
     
 ##############################################
 ############## UNET with TR ##################
@@ -410,26 +454,26 @@ class Discriminator(nn.Module):
 ##############################################
 
 class UNeTransformedSpectral(nn.Module):
-    def __init__(self, in_channels, out_channels, num_bands, spectral_dim=768, num_tokens=196):
+    def __init__(self, in_channels, out_channels, num_bands, spectral_dim=256, num_tokens=196, patch_size=16):
         super(UNeTransformedSpectral, self).__init__()
         
         # spectral embedding
         self.spectral_embed = SpectralEmbedding(input_dim=num_bands, embed_dim=spectral_dim, num_tokens=num_tokens)
         
-        # decoder
+        # encoder
         self.down_conv_1 = Downsample(in_channels, out_channels=64)
-        self.trans_1 = TransformerBlockSpectral(embed_dim=64, num_heads=1, ff_dim=256)
+        self.trans_1 = TransformerBlockSpectral(embed_dim=64, signal_dim=spectral_dim, num_heads=1, ff_dim=256, patch_size=patch_size)
         self.down_conv_2 = Downsample(in_channels=64, out_channels=128)
-        self.trans_2 = TransformerBlockSpectral(embed_dim=128, num_heads=1, ff_dim=512)
+        self.trans_2 = TransformerBlockSpectral(embed_dim=128, signal_dim=spectral_dim, num_heads=1, ff_dim=512, patch_size=patch_size)
         self.down_conv_3 = Downsample(in_channels=128, out_channels=256)
-        self.trans_3 = TransformerBlockSpectral(embed_dim=256, num_heads=2, ff_dim=1024)
+        self.trans_3 = TransformerBlockSpectral(embed_dim=256, signal_dim=spectral_dim, num_heads=2, ff_dim=1024, patch_size=patch_size)
         self.down_conv_4 = Downsample(in_channels=256, out_channels=512)
-        self.trans_4 = TransformerBlockSpectral(embed_dim=512, num_heads=2, ff_dim=2048)
+        self.trans_4 = TransformerBlockSpectral(embed_dim=512, signal_dim=spectral_dim, num_heads=2, ff_dim=2048, patch_size=patch_size)
         
         # bottleneck
         self.bottle_neck = DoubleConv(in_channels=512, out_channels=1024)
         
-        # encoder
+        # decoder
         self.up_conv_1 = Upsample(in_channels=1024, out_channels=512)
         self.up_conv_2 = Upsample(in_channels=512, out_channels=256)
         self.up_conv_3 = Upsample(in_channels=256, out_channels=128)
