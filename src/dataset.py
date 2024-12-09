@@ -1,5 +1,6 @@
 import os
 import cv2
+import torch
 import numpy as np
 import pandas as pd
 
@@ -289,6 +290,9 @@ class PotatoDatasetSpectra(Dataset):
         rgb_image, spectral_images = self.data[idx]
         spectrum = self.image_spectra_mapping[self.rgb_files[idx]]
         spectrum = np.expand_dims(spectrum, axis=0) # [1, num_bands]
+        
+        # convert spectrum to tensor
+        spectrum = torch.tensor(spectrum, dtype=torch.float32)
 
         # Convert to PIL
         rgb_image = Image.fromarray(rgb_image).convert('RGB')

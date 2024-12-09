@@ -441,7 +441,6 @@ class UNeTransformedSpectral(nn.Module):
     def forward(self, x, spectral_signal):
         
         # create spectral embedding
-        spectral_signal = spectral_signal.to(dtype=torch.float)
         spectral_signal = self.spectral_embed(spectral_signal)
         
         # decoder
