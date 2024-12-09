@@ -462,13 +462,13 @@ class UNeTransformedSpectral(nn.Module):
         
         # encoder
         self.down_conv_1 = Downsample(in_channels, out_channels=64)
-        self.trans_1 = TransformerBlockSpectral(embed_dim=64, signal_dim=spectral_dim, num_heads=1, ff_dim=256, patch_size=patch_size)
+        self.trans_1 = TransformerBlockSpectral(embed_dim=64, signal_dim=spectral_dim, num_heads=2, ff_dim=256, patch_size=patch_size)
         self.down_conv_2 = Downsample(in_channels=64, out_channels=128)
-        self.trans_2 = TransformerBlockSpectral(embed_dim=128, signal_dim=spectral_dim, num_heads=1, ff_dim=512, patch_size=patch_size)
+        self.trans_2 = TransformerBlockSpectral(embed_dim=128, signal_dim=spectral_dim, num_heads=2, ff_dim=512, patch_size=patch_size)
         self.down_conv_3 = Downsample(in_channels=128, out_channels=256)
-        self.trans_3 = TransformerBlockSpectral(embed_dim=256, signal_dim=spectral_dim, num_heads=2, ff_dim=1024, patch_size=patch_size)
+        self.trans_3 = TransformerBlockSpectral(embed_dim=256, signal_dim=spectral_dim, num_heads=4, ff_dim=1024, patch_size=patch_size)
         self.down_conv_4 = Downsample(in_channels=256, out_channels=512)
-        self.trans_4 = TransformerBlockSpectral(embed_dim=512, signal_dim=spectral_dim, num_heads=2, ff_dim=2048, patch_size=patch_size)
+        self.trans_4 = TransformerBlockSpectral(embed_dim=512, signal_dim=spectral_dim, num_heads=4, ff_dim=2048, patch_size=patch_size)
         
         # bottleneck
         self.bottle_neck = DoubleConv(in_channels=512, out_channels=1024)
