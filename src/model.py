@@ -1,4 +1,5 @@
 import math
+import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -95,18 +96,41 @@ class TransformerBlockSpectral(nn.Module):
         self.norm3 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
         
+        # projection for signal
         self.proj = nn.Linear(signal_dim, embed_dim)
         
-    def forward(self, x, signal=None):
+        # positional embeddings
+        self.pos_embed = None
+        
+    def forward(self, x, signal=None, mask=None):
         
         b, c, h, w = x.shape
         
         # apply patch embedding
         x, (ph, pw) = self.patch_embed(x)
+        
+        # create positional embeddings
+        if self.pos_embed is None or self.pos_embed.size(1) != ph * pw:
+            self.pos_embed = nn.Parameter(torch.zeros(1, ph * pw, x.size(2), device=x.device))
+            nn.init.trunc_normal_(self.pos_embed, std=0.02)
+            
+        x = x + self.pos_embed
+        
+        # create patch mask
+        if mask is not None:
+            patch_mask = F.interpolate(
+                mask.unsqueeze(1).float(),
+                size=(ph, pw),
+                mode="nearest"
+            ).squeeze(1)
+            patch_mask = (patch_mask > 0.5).to(torch.bool)
+            patch_mask = patch_mask.view(b, -1) # flatten to (b, num_patches)
                 
         # self attention
         x = x.transpose(0, 1)
-        attn_output, self_weights = self.self_attn(x, x, x)
+        attn_output, self_weights = self.self_attn(
+            x, x, x, key_padding_mask=~patch_mask if patch_mask is not None else None
+        )
         x = x + self.dropout(attn_output)
         x = self.norm1(x)
         
@@ -115,7 +139,10 @@ class TransformerBlockSpectral(nn.Module):
         if signal is not None:
             signal = self.proj(signal)
             signal = signal.transpose(0, 1)
-            attn_output, cross_weights = self.cross_attn(x, signal, signal) # TODO: try V as image
+            
+            attn_output, cross_weights = self.cross_attn(
+                x, signal, signal
+            ) # TODO: try V as image
             x = x + self.dropout(attn_output)
             x = self.norm2(x)
             
@@ -483,20 +510,20 @@ class UNeTransformedSpectral(nn.Module):
         # output layer
         self.out = nn.Conv2d(in_channels=64, out_channels=out_channels, kernel_size=1)
     
-    def forward(self, x, spectral_signal, get_weights=False):
+    def forward(self, x, spectral_signal, get_weights=False, mask=None):
         
         # create spectral embedding
         spectral_signal = self.spectral_embed(spectral_signal)
         
         # decoder
         down_1, p1 = self.down_conv_1(x)
-        trans_1, self_weights_1, cross_weights_1 = self.trans_1(down_1, spectral_signal)
+        trans_1, self_weights_1, cross_weights_1 = self.trans_1(down_1, spectral_signal, mask=mask)
         down_2, p2 = self.down_conv_2(p1)
-        trans_2, self_weights_2, cross_weights_2 = self.trans_2(down_2, spectral_signal)
+        trans_2, self_weights_2, cross_weights_2 = self.trans_2(down_2, spectral_signal, mask=mask)
         down_3, p3 = self.down_conv_3(p2)
-        trans_3, self_weights_3, cross_weights_3 = self.trans_3(down_3, spectral_signal)
+        trans_3, self_weights_3, cross_weights_3 = self.trans_3(down_3, spectral_signal, mask=mask)
         down_4, p4 = self.down_conv_4(p3)
-        trans_4, self_weights_4, cross_weights_4 = self.trans_4(down_4, spectral_signal)
+        trans_4, self_weights_4, cross_weights_4 = self.trans_4(down_4, spectral_signal, mask=mask)
         
         # bottleneck
         b = self.bottle_neck(p4)

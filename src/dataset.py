@@ -198,7 +198,7 @@ class PotatoDataset(Dataset):
 class PotatoDatasetSpectra(Dataset):
     
     def __init__(
-        self, rgb_dir, spectral_dir, spectral_file, transform=None, mode='train', align=False, crop_factor=0.8, split_ratio=0.8, random_seed=42
+        self, rgb_dir, spectral_dir, spectral_file, transform=None, mode='train', align=False, crop_factor=0.8, split_ratio=0.8, random_seed=42, hsv_bounds=((35, 40, 40), (85, 255, 255))
     ):
         """Multispectral Potato Detection and Classification Dataset"""
         self.mode = mode
@@ -207,6 +207,7 @@ class PotatoDatasetSpectra(Dataset):
         self.crop_factor = crop_factor
         self.spectral_file = spectral_file
         self.channels = ['Green_Channel', 'Near_Infrared_Channel', 'Red_Channel', 'Red_Edge_Channel']
+        self.hsv_lower, self.hsv_upper = hsv_bounds
         
         # load spectral data
         df_spectra = pd.read_csv(spectral_file, index_col=0)
@@ -272,7 +273,7 @@ class PotatoDatasetSpectra(Dataset):
         # map spectra to images
         self.image_spectra_mapping = {img: spectra_array_repeated[i] for i, img in enumerate(self.rgb_files)}
 
-        # Preload and align images using multiprocessing
+        # preload and align images using multiprocessing
         args_list = [
             (rgb_dir, spectral_dir, folder_set, rgb_name, idx, self.channels, self.spectral_files, self.align)
             for idx, rgb_name in enumerate(self.rgb_files)
@@ -294,25 +295,51 @@ class PotatoDatasetSpectra(Dataset):
         # convert spectrum to tensor
         spectrum = torch.tensor(spectrum, dtype=torch.float32)
 
-        # Convert to PIL
+        # convert to PIL
         rgb_image = Image.fromarray(rgb_image).convert('RGB')
         spectral_images = [Image.fromarray(img) for img in spectral_images]
 
-        # Apply transformations
+        # apply transformations
         if self.transform:
             rgb_image = self.transform(rgb_image)
             spectral_images = [self.transform(img) for img in spectral_images]
 
-        return (rgb_image, spectrum, *spectral_images)
+        # hsv segmentation
+        hsv_mask = self.segment_hsv(np.array(rgb_image))
+
+        return (rgb_image, spectrum, hsv_mask, *spectral_images)
+    
+    def segment_hsv(self, image):
+        """
+        Perform HSV segmentation and save the mask for debugging.
+
+        Args:
+            image (numpy.ndarray): RGB image in HWC or CHW format, normalized between 0 and 1.
+
+        Returns:
+            numpy.ndarray: Binary mask.
+        """
+
+        if image.shape[0] == 3 and len(image.shape) == 3:
+            image = image.transpose(1, 2, 0)
+
+
+        if image.shape[2] != 3:  # Not 3 channels
+            raise ValueError(f"Invalid image shape for HSV segmentation: {image.shape}")
+
+        image_rescaled = (image * 255).astype(np.uint8)
+        hsv_image = cv2.cvtColor(image_rescaled, cv2.COLOR_RGB2HSV)
+        mask = cv2.inRange(hsv_image, self.hsv_lower, self.hsv_upper)
+
+        return mask
 
     def process_image(self, args):
         rgb_dir, spectral_dir, folder_set, rgb_name, idx, channels, spectral_files, align = args
 
-        # Read the RGB image
         rgb_path = os.path.join(rgb_dir, folder_set, rgb_name)
         rgb_im = cv2.imread(rgb_path)
 
-        # Ensure the base names match
+        # ensure the base names match
         for channel in channels:
             spectral_file = spectral_files[channel][idx]
             if os.path.splitext(rgb_name)[0] != os.path.splitext(spectral_file)[0]:
@@ -320,7 +347,7 @@ class PotatoDatasetSpectra(Dataset):
                     f"Mismatch detected: RGB file '{rgb_name}' does not match spectral file '{spectral_file}' in channel '{channel}'"
                 )
 
-        # Resize RGB to match spectral dimensions
+        # resize RGB to match spectral dimensions
         height, width = cv2.imread(
             os.path.join(spectral_dir, channels[0], folder_set, spectral_files[channels[0]][idx]),
             cv2.IMREAD_GRAYSCALE
@@ -328,7 +355,7 @@ class PotatoDatasetSpectra(Dataset):
         rgb_resized = cv2.resize(rgb_im, (width, height), interpolation=cv2.INTER_LINEAR)
         rgb_gray = cv2.cvtColor(rgb_resized, cv2.COLOR_BGR2GRAY)
 
-        # Process spectral images
+        # process spectral images
         spectral_images = []
         for channel in channels:
             spectral_path = os.path.join(spectral_dir, channel, folder_set, spectral_files[channel][idx])
@@ -339,12 +366,12 @@ class PotatoDatasetSpectra(Dataset):
             else:
                 spectral_images.append(spectral_im)
 
-        # Validate size consistency
+        # validate size consistency
         for channel, spectral_im in zip(channels, spectral_images):
             assert spectral_im.shape == rgb_resized.shape[:2], \
                 f"Size mismatch: RGB {rgb_resized.shape[:2]} vs {channel} {spectral_im.shape}"
 
-        # Crop images to the center
+        # crop images to the center
         crop_height = int(height * self.crop_factor)
         crop_width = int(width * self.crop_factor)
         crop_size = (crop_height, crop_width)
@@ -372,18 +399,18 @@ class PotatoDatasetSpectra(Dataset):
         matcher = cv2.FlannBasedMatcher()
         matches = matcher.knnMatch(des1, des2, k=2)
 
-        # Filter good matches
+        # filter good matches
         good = []
         for m, n in matches:
             if m.distance < 0.7 * n.distance:
                     good.append(m)
 
-        # Estimate homography
+        # estimate homography
         src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
         dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
         H, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
 
-        # Warp image
+        # warp image
         aligned_img = cv2.warpPerspective(img_to_align, H, (base_img.shape[1], base_img.shape[0]))
         return aligned_img
     
